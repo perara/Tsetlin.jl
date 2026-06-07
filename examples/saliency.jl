@@ -51,3 +51,19 @@ for c in Int8.(0:CLASSES - 1)
     top = sort(sortperm(smap, rev=true)[1:SIG])
     println("  class $c (n=$used): saliency ", top, "  signature ", sort(signatures[c + 1]))
 end
+
+# --- exact clause decomposition: the TM-native reason for the prediction ---
+println("\nexact clause decomposition (top 3 clauses for the prediction):")
+for c in top_clauses(tm, x; k=3)
+    println("  clause $(c.clause): vote=$(c.vote), matched bits=", sort(findall(c.matched)))
+end
+
+# --- faithfulness certification: saliency must beat a random ordering ---
+osal = sortperm(imp, rev=true); orand = randperm(rng, length(x))
+fs = faithfulness(tm, x, osal); fr = faithfulness(tm, x, orand)
+println("\nfaithfulness deletion  AUC (lower=better): saliency ", round(fs.deletion_auc, digits=2), " | random ", round(fr.deletion_auc, digits=2))
+println("faithfulness insertion AUC (higher=better): saliency ", round(fs.insertion_auc, digits=2), " | random ", round(fr.insertion_auc, digits=2))
+
+# --- counterfactual: minimal saliency-ranked flips that change the class ---
+cf = counterfactual(tm, x, osal)
+println("\ncounterfactual: flipping $(length(cf.flips)) bits changes $(cf.original) -> $(cf.new) (success=$(cf.success))")

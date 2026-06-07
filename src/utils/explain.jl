@@ -1,6 +1,6 @@
 include("../Tsetlin.jl")
 
-export explain, saliency, class_saliency
+export explain, saliency, class_saliency, top_clauses, faithfulness, counterfactual
 
 using Base.Threads
 using .Tsetlin: TMInput, TMClassifier, TATeam, predict
@@ -231,4 +231,89 @@ function class_saliency(tm::TMClassifier{ClassType}, X::AbstractVector{TMInput},
     end
     cnt > 0 && (acc ./= cnt)
     return acc, cnt
+end
+
+
+_copy(x::TMInput) = (c = Memory{UInt64}(undef, length(x.chunks)); copyto!(c, x.chunks); TMInput(c, x.len))
+
+"""
+    top_clauses(tm, x; target=nothing, k=5, index=false)
+
+Exact clause-level decomposition of a prediction: the `k` highest-voting clauses
+for the `target` class (default: the predicted class), each as a NamedTuple with
+its `clause` index, `vote`, and the `matched`/`matched_inverted` literal bitmasks
+(the conjunction that actually fired). This is the model's real computation, not
+an approximation, so it is maximally faithful.
+"""
+function top_clauses(tm::TMClassifier{ClassType}, x::TMInput; target::Union{ClassType, Nothing}=nothing, k::Int=5, index::Bool=false) where ClassType
+    cls = target === nothing ? predict(tm, x; index=index) : target
+    ta = ClassType <: Bool ? tm.clauses : tm.clauses[findfirst(==(cls), tm.classes)]
+    C = size(ta.positive_included_literals, 2)
+    ecs = [explain(tm, x, @view(ta.positive_included_literals[:, i]), @view(ta.positive_included_literals_inverted[:, i])) for i in 1:C]
+    ord = sortperm(ecs; by = c -> c.vote, rev=true)
+    return [(clause = i, vote = ecs[i].vote, matched = ecs[i].matched_literals, matched_inverted = ecs[i].matched_literals_inverted) for i in ord[1:min(k, C)]]
+end
+
+# Margin (target score minus best competitor) for a given input, reusing buffer s.
+@inline function _margin_at(tm, x::TMInput, ti::Int, s::Vector{Int64}; index::Bool=false)
+    _class_scores!(s, tm, x; index=index)
+    return _margin(s, ti)
+end
+
+"""
+    faithfulness(tm, x, order; target=nothing, index=false, steps=25)
+
+Deletion/insertion faithfulness test for an attribution `order` (bit indices,
+most-important first). Deletion progressively sets the top bits to 0 (margin
+should drop fast for a faithful order); insertion progressively reveals them on
+a blank input (margin should rise fast). Returns a NamedTuple with the curves,
+their `fracs`, and AUCs (`deletion_auc` lower = better, `insertion_auc` higher =
+better). Domain-agnostic.
+"""
+function faithfulness(tm::TMClassifier{ClassType}, x::TMInput, order::AbstractVector{<:Integer}; target::Union{ClassType, Nothing}=nothing, index::Bool=false, steps::Int=25) where ClassType
+    K = length(tm.classes)
+    s = Vector{Int64}(undef, K)
+    _class_scores!(s, tm, x; index=index)
+    ti = target === nothing ? argmax(s) : findfirst(==(target), tm.classes)
+    n = length(x)
+    fracs = collect(range(0.0, 1.0; length=steps + 1))
+
+    del = Float64[]; xd = _copy(x); prev = 0
+    for f in fracs
+        kk = round(Int, f * n)
+        @inbounds for j in (prev + 1):kk; xd[order[j]] = false; end
+        prev = kk
+        push!(del, _margin_at(tm, xd, ti, s; index=index))
+    end
+
+    ins = Float64[]; xi = TMInput(n); prev = 0
+    for f in fracs
+        kk = round(Int, f * n)
+        @inbounds for j in (prev + 1):kk; xi[order[j]] = x[order[j]]; end
+        prev = kk
+        push!(ins, _margin_at(tm, xi, ti, s; index=index))
+    end
+
+    return (; fracs, deletion = del, insertion = ins,
+            deletion_auc = sum(del) / length(del), insertion_auc = sum(ins) / length(ins),
+            base_margin = del[1])
+end
+
+"""
+    counterfactual(tm, x, order; index=false, max_flips=length(x))
+
+Greedy counterfactual: flip bits in `order` (e.g. saliency-descending) one at a
+time until the prediction changes. Returns `(flips, original, new, success)` —
+the minimal-by-this-order set of bit flips that changes the decision.
+"""
+function counterfactual(tm::TMClassifier, x::TMInput, order::AbstractVector{<:Integer}; index::Bool=false, max_flips::Int=length(x))
+    orig = predict(tm, x; index=index)
+    xc = _copy(x); flips = Int[]
+    @inbounds for j in 1:min(max_flips, length(order))
+        i = order[j]; xc[i] = !xc[i]; push!(flips, i)
+        if predict(tm, xc; index=index) != orig
+            return (; flips, original = orig, new = predict(tm, xc; index=index), success = true)
+        end
+    end
+    return (; flips, original = orig, new = predict(tm, xc; index=index), success = false)
 end
