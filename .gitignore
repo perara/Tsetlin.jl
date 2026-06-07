@@ -3,3 +3,6 @@
 /benchmarks/results/
 /public/
 /.benchmark-artifacts/
+
+# VS Code local history
+.history/

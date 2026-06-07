@@ -255,7 +255,26 @@ end
 end
 
 
-function feedback!(tm::TMClassifier{<:Any, N, <:Any, <:Any, C}, ta::TATeam{StateType}, x::TMInput, clauses1::Matrix{StateType}, clauses_inverted1::Matrix{StateType}, clauses2::Matrix{StateType}, clauses_inverted2::Matrix{StateType}, literals1::Matrix{UInt64}, literals_inverted1::Matrix{UInt64}, literals2::Matrix{UInt64}, literals_inverted2::Matrix{UInt64}, literals1_idx::Matrix{UInt64}, literals2_idx::Matrix{UInt64}, positive::Bool, index::Bool) where {N, StateType, C}
+# Keep a literal and its inverse from ever being included together: at each
+# overlapping position, drop the one whose TA counter is weaker. Makes clauses
+# contradiction-free without affecting accuracy or speed (see train! exclusive=).
+@inline function exclusive_resolve!(l, li, c, ci, N::Int)
+    @inbounds for n in 1:N
+        ov = l[n] & li[n]
+        while ov != zero(UInt64)
+            b = trailing_zeros(ov)
+            p = (n - 1) * 64 + b + 1
+            if c[p] >= ci[p]
+                li[n] &= ~(one(UInt64) << b)
+            else
+                l[n] &= ~(one(UInt64) << b)
+            end
+            ov &= ov - one(UInt64)
+        end
+    end
+end
+
+function feedback!(tm::TMClassifier{<:Any, N, <:Any, <:Any, C}, ta::TATeam{StateType}, x::TMInput, clauses1::Matrix{StateType}, clauses_inverted1::Matrix{StateType}, clauses2::Matrix{StateType}, clauses_inverted2::Matrix{StateType}, literals1::Matrix{UInt64}, literals_inverted1::Matrix{UInt64}, literals2::Matrix{UInt64}, literals_inverted2::Matrix{UInt64}, literals1_idx::Matrix{UInt64}, literals2_idx::Matrix{UInt64}, positive::Bool, index::Bool, exclusive::Bool) where {N, StateType, C}
     T = tm.T
     pos, neg = vote(tm, ta, x, index=index)
     v = clamp(pos - neg, -T, T)
@@ -374,6 +393,7 @@ function feedback!(tm::TMClassifier{<:Any, N, <:Any, <:Any, C}, ta::TATeam{State
                     li[d] = li[d] & ~(one(UInt64) << r) | UInt64(ci[i] >= include_limit) << r
                 end
             end
+            exclusive && exclusive_resolve!(l, li, c, ci, N)
             index && update_index(tm, l, li, l_idx)
         end
     # end
@@ -422,6 +442,7 @@ function feedback!(tm::TMClassifier{<:Any, N, <:Any, <:Any, C}, ta::TATeam{State
                 end
                 li[n] = li_mask
             end
+            exclusive && exclusive_resolve!(l, li, c, ci, N)
             index && update_index(tm, l, li, l_idx)
         end
     end
@@ -467,38 +488,38 @@ function accuracy(predicted::Vector{T}, Y::Vector{T})::Float64 where T
 end
 
 
-function train!(tm::TMClassifier{ClassType}, x::TMInput, y::ClassType; index::Bool=false) where ClassType <: Bool
+function train!(tm::TMClassifier{ClassType}, x::TMInput, y::ClassType; index::Bool=false, exclusive::Bool=false) where ClassType <: Bool
     ta = tm.clauses
     if y == true
-        feedback!(tm, ta, x, ta.positive_clauses, ta.positive_clauses_inverted, ta.negative_clauses, ta.negative_clauses_inverted, ta.positive_included_literals, ta.positive_included_literals_inverted, ta.negative_included_literals, ta.negative_included_literals_inverted, ta.positive_included_literals_idx, ta.negative_included_literals_idx, true, index)
+        feedback!(tm, ta, x, ta.positive_clauses, ta.positive_clauses_inverted, ta.negative_clauses, ta.negative_clauses_inverted, ta.positive_included_literals, ta.positive_included_literals_inverted, ta.negative_included_literals, ta.negative_included_literals_inverted, ta.positive_included_literals_idx, ta.negative_included_literals_idx, true, index, exclusive)
     else
-        feedback!(tm, ta, x, ta.negative_clauses, ta.negative_clauses_inverted, ta.positive_clauses, ta.positive_clauses_inverted, ta.negative_included_literals, ta.negative_included_literals_inverted, ta.positive_included_literals, ta.positive_included_literals_inverted, ta.negative_included_literals_idx, ta.positive_included_literals_idx, false, index)
+        feedback!(tm, ta, x, ta.negative_clauses, ta.negative_clauses_inverted, ta.positive_clauses, ta.positive_clauses_inverted, ta.negative_included_literals, ta.negative_included_literals_inverted, ta.positive_included_literals, ta.positive_included_literals_inverted, ta.negative_included_literals_idx, ta.positive_included_literals_idx, false, index, exclusive)
     end
 end
 
 
-function train!(tm::TMClassifier{ClassType}, x::TMInput, y::ClassType; index::Bool=false) where ClassType
+function train!(tm::TMClassifier{ClassType}, x::TMInput, y::ClassType; index::Bool=false, exclusive::Bool=false) where ClassType
     classes = tm.classes
     clauses = tm.clauses
     @inbounds for i in eachindex(classes)
         ta = clauses[i]
         if classes[i] == y
-            feedback!(tm, ta, x, ta.positive_clauses, ta.positive_clauses_inverted, ta.negative_clauses, ta.negative_clauses_inverted, ta.positive_included_literals, ta.positive_included_literals_inverted, ta.negative_included_literals, ta.negative_included_literals_inverted, ta.positive_included_literals_idx, ta.negative_included_literals_idx, true, index)
+            feedback!(tm, ta, x, ta.positive_clauses, ta.positive_clauses_inverted, ta.negative_clauses, ta.negative_clauses_inverted, ta.positive_included_literals, ta.positive_included_literals_inverted, ta.negative_included_literals, ta.negative_included_literals_inverted, ta.positive_included_literals_idx, ta.negative_included_literals_idx, true, index, exclusive)
         else
-            feedback!(tm, ta, x, ta.negative_clauses, ta.negative_clauses_inverted, ta.positive_clauses, ta.positive_clauses_inverted, ta.negative_included_literals, ta.negative_included_literals_inverted, ta.positive_included_literals, ta.positive_included_literals_inverted, ta.negative_included_literals_idx, ta.positive_included_literals_idx, false, index)
+            feedback!(tm, ta, x, ta.negative_clauses, ta.negative_clauses_inverted, ta.positive_clauses, ta.positive_clauses_inverted, ta.negative_included_literals, ta.negative_included_literals_inverted, ta.positive_included_literals, ta.positive_included_literals_inverted, ta.negative_included_literals_idx, ta.positive_included_literals_idx, false, index, exclusive)
         end
     end
 end
 
 
-function train!(tm::TMClassifier{ClassType}, X::Vector{TMInput}, Y::Vector{ClassType}; shuffle::Bool=true, index::Bool=false) where ClassType
+function train!(tm::TMClassifier{ClassType}, X::Vector{TMInput}, Y::Vector{ClassType}; shuffle::Bool=true, index::Bool=false, exclusive::Bool=false) where ClassType
     @threads for i in ifelse(shuffle, randperm(length(Y)), eachindex(Y))
-        train!(tm, X[i], Y[i], index=index)
+        train!(tm, X[i], Y[i], index=index, exclusive=exclusive)
     end
 end
 
 
-function train!(tm::TMClassifier{ClassType}, x_train::Vector{TMInput}, y_train::Vector{ClassType}, x_test::Vector{TMInput}, y_test::Vector{ClassType}, epochs::Int64; shuffle::Bool=true, index::Bool=false, verbose::Int=1, best_tms_size::Int64=0, best_tms_compile::Bool=true)::Vector{Tuple{TMClassifier, Float64}} where ClassType
+function train!(tm::TMClassifier{ClassType}, x_train::Vector{TMInput}, y_train::Vector{ClassType}, x_test::Vector{TMInput}, y_test::Vector{ClassType}, epochs::Int64; shuffle::Bool=true, index::Bool=false, exclusive::Bool=false, verbose::Int=1, best_tms_size::Int64=0, best_tms_compile::Bool=true)::Vector{Tuple{TMClassifier, Float64}} where ClassType
     @assert best_tms_size in 0:2000
     if verbose > 0
         density = round(sum(sum(x) for x in x_train) / (length(x_train[1]) * length(x_train)) * 100, digits=2)
@@ -511,7 +532,7 @@ function train!(tm::TMClassifier{ClassType}, x_train::Vector{TMInput}, y_train::
     best_tms = Tuple{TMClassifier, Float64}[]
     all_time = @elapsed begin
         @inbounds for i in 1:epochs
-            training_time = @elapsed train!(tm, x_train, y_train, shuffle=shuffle, index=index)
+            training_time = @elapsed train!(tm, x_train, y_train, shuffle=shuffle, index=index, exclusive=exclusive)
             testing_time = @elapsed predicted = predict(tm, x_test, index=index)
             acc = accuracy(predicted, y_test)
             best_acc = ifelse(acc > best_acc, acc, best_acc)
