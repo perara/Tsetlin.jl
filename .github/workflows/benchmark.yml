@@ -1,0 +1,127 @@
+name: Benchmark
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Benchmark mode
+        required: true
+        default: quick
+        type: choice
+        options:
+          - quick
+          - full
+          - exhaustive
+      repeats:
+        description: Override repeat count. Leave empty for mode default.
+        required: false
+        default: ""
+      min_sample_ms:
+        description: Override minimum sample time in milliseconds. Leave empty for mode default.
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+# Run the JavaScript actions on Node 24 (they ship Node 20, deprecated by GitHub).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  benchmark:
+    name: FPTM benchmark
+    runs-on: ubuntu-latest
+    env:
+      BENCHMARK_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'quick' }}
+      # Raw dispatch inputs (empty for push/PR). Defaulting happens in the run step
+      # so dispatch-with-empty still honours the per-mode defaults.
+      BENCHMARK_REPEATS: ${{ inputs.repeats }}
+      BENCHMARK_MIN_SAMPLE_MS: ${{ inputs.min_sample_ms }}
+      JULIA_NUM_THREADS: auto
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: "1.12"
+
+      - name: Show Julia version
+        run: julia --version
+
+      - name: Run benchmark suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p benchmarks/results
+
+          # Push/PR runs take extra samples for a stable median on noisy shared
+          # runners. workflow_dispatch keeps per-mode defaults unless overridden.
+          if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
+            BENCHMARK_REPEATS="${BENCHMARK_REPEATS:-15}"
+            BENCHMARK_MIN_SAMPLE_MS="${BENCHMARK_MIN_SAMPLE_MS:-25}"
+          fi
+
+          args=(--mode="${BENCHMARK_MODE}" --format=json --output=benchmarks/results/benchmark.json)
+          if [[ -n "${BENCHMARK_REPEATS}" ]]; then
+            args+=(--repeats="${BENCHMARK_REPEATS}")
+          fi
+          if [[ -n "${BENCHMARK_MIN_SAMPLE_MS}" ]]; then
+            args+=(--min-sample-ms="${BENCHMARK_MIN_SAMPLE_MS}")
+          fi
+
+          julia -O3 -t auto benchmarks/runbenchmarks.jl "${args[@]}"
+
+      - name: Write benchmark metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require("fs");
+
+          const metadata = {
+            schema: 1,
+            repository: process.env.GITHUB_REPOSITORY,
+            sha: process.env.GITHUB_SHA,
+            short_sha: process.env.GITHUB_SHA.slice(0, 7),
+            ref: process.env.GITHUB_REF,
+            ref_name: process.env.GITHUB_REF_NAME,
+            event: process.env.GITHUB_EVENT_NAME,
+            run_id: process.env.GITHUB_RUN_ID,
+            run_attempt: process.env.GITHUB_RUN_ATTEMPT,
+            run_number: process.env.GITHUB_RUN_NUMBER,
+            workflow: process.env.GITHUB_WORKFLOW,
+            actor: process.env.GITHUB_ACTOR,
+            mode: process.env.BENCHMARK_MODE,
+            runner_os: process.env.RUNNER_OS,
+            runner_arch: process.env.RUNNER_ARCH,
+            created_at: new Date().toISOString(),
+            artifact_name: `benchmark-report-${process.env.GITHUB_SHA}-${process.env.GITHUB_RUN_ID}`
+          };
+
+          fs.writeFileSync("benchmarks/results/metadata.json", JSON.stringify(metadata, null, 2));
+          NODE
+          julia --version > benchmarks/results/julia-version.txt
+
+      - name: Create benchmark summary
+        run: |
+          node benchmarks/site/build.js summary \
+            --input benchmarks/results/benchmark.json \
+            --metadata benchmarks/results/metadata.json \
+            --out benchmarks/results
+          cat benchmarks/results/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload benchmark artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-report-${{ github.sha }}-${{ github.run_id }}
+          path: benchmarks/results/
+          if-no-files-found: error
+          retention-days: 90

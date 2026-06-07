@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <title>Tsetlin.jl Benchmark Dashboard</title>
+    <script>
+      // Set the theme before first paint to avoid a flash of the wrong theme.
+      (function () {
+        try {
+          var stored = localStorage.getItem("theme");
+          var theme = (stored === "light" || stored === "dark")
+            ? stored
+            : (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+          document.documentElement.dataset.theme = theme;
+        } catch (e) {
+          document.documentElement.dataset.theme = "dark";
+        }
+      })();
+    </script>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="hero">
+      <div>
+        <p class="eyebrow">FPTM performance history</p>
+        <h1>Tsetlin.jl Benchmarks</h1>
+        <p class="lede">Benchmark scores, timings, and allocation trends across retained GitHub Actions artifacts.</p>
+      </div>
+      <div class="hero-side">
+        <button id="theme-toggle" class="theme-toggle" type="button" aria-pressed="false" title="Toggle theme">
+          <span aria-hidden="true">&#9728;</span> Light
+        </button>
+        <div class="hero-meta" id="hero-meta">
+          <span>Loading benchmark artifacts...</span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="summary-grid" id="summary-grid"></section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>Speed Score Trend</h2>
+            <p>Geometric mean throughput across all benchmark cases in each run.</p>
+          </div>
+          <a class="link-button" href="data/benchmarks.json">Raw JSON</a>
+        </div>
+        <div class="chart-wrap">
+          <svg id="score-chart" role="img" aria-label="Benchmark speed score trend"></svg>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>Commit Comparison</h2>
+            <p>Latest median time, change vs the previous run, historical best, and a sparkline trend across the selected runs. Lower is faster. Click any row for per-commit measurements.</p>
+          </div>
+          <div class="controls">
+            <button id="expand-all" class="link-button" type="button">Expand all</button>
+            <button id="collapse-all" class="link-button" type="button">Collapse all</button>
+            <input id="search" type="search" placeholder="Filter benchmarks">
+            <select id="sort" aria-label="Sort benchmarks">
+              <option value="name">Group &amp; name</option>
+              <option value="regression">Biggest regression</option>
+              <option value="improvement">Biggest improvement</option>
+              <option value="slowest">Slowest</option>
+              <option value="fastest">Fastest</option>
+            </select>
+            <select id="group-filter" aria-label="Filter by benchmark group">
+              <option value="">All groups</option>
+            </select>
+            <select id="mode-filter" aria-label="Filter by benchmark mode">
+              <option value="">All modes</option>
+            </select>
+            <select id="run-window" aria-label="Number of commits to show">
+              <option value="10">10 runs</option>
+              <option value="25">25 runs</option>
+              <option value="50" selected>50 runs</option>
+              <option value="100">100 runs</option>
+              <option value="250">250 runs</option>
+            </select>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table id="comparison-table"></table>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <span>Generated from GitHub Actions benchmark artifacts.</span>
+      <span id="generated-at"></span>
+    </footer>
+
+    <script src="app.js"></script>
+  </body>
+</html>

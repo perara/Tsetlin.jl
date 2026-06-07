@@ -1,2 +1,5 @@
 /Project.toml
 /Manifest.toml
+/benchmarks/results/
+/public/
+/.benchmark-artifacts/
