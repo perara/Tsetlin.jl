@@ -7,11 +7,12 @@ import Pkg
 
 using CairoMakie
 using MLDatasets: MNIST, FashionMNIST
-using .Tsetlin: TMInput, TMClassifier, train!, save, load, unzip, booleanize, compile, check_clause
+using .Tsetlin: TMInput, TMClassifier, train!, save, load, unzip, booleanize, compile, check_clause, predict
 
 
 MODEL_PATH = joinpath(tempdir(), "tm.tm")
 IMAGE_PATH = joinpath(tempdir(), "FPTM_MNIST_heatmap.png")
+SALIENCY_IMAGE_PATH = joinpath(tempdir(), "FPTM_MNIST_saliency.png")
 
 x_train, y_train = unzip([MNIST(:train)...])
 x_test, y_test = unzip([MNIST(:test)...])
@@ -84,6 +85,26 @@ function draw_block!(fig, start_row, vectors, title; colormap = :hot)
 end
 
 
+# Occlusion-saliency heatmap per class, using the general class_saliency from
+# src/utils/explain.jl. Unlike the raw literal dump above, this shows what the
+# model actually uses to decide, so it stays clean even for dense/high-LF models.
+function plot_saliency(tm, X, Y; per_class = 40, colormap = :hot)
+    set_theme!(theme_dark())
+    fig = Figure(size = (1000, 480))
+    for d in 0:9
+        Xc = [X[i] for i in eachindex(X) if Y[i] == Int8(d)]
+        smap, _ = class_saliency(tm, Xc, Int8(d); limit = per_class)
+        data = reverse(reshape(max.(0.0, smap), 28, 28), dims = 2)
+        ax = Axis(fig[1 + d ÷ 5, d % 5 + 1], aspect = DataAspect(), title = string(d))
+        heatmap!(ax, data, colormap = colormap)
+        hidedecorations!(ax)
+        hidespines!(ax)
+    end
+    Label(fig[0, :], "FPTM MNIST occlusion saliency (per class)", fontsize = 28, halign = :left)
+    return fig
+end
+
+
 function plot_heatmaps(explained_model::Dict; colormap = :hot)
     set_theme!(theme_dark())
     fig = Figure(size = (1000, 460 * 4))
@@ -136,4 +157,12 @@ fig = plot_heatmaps(explained_model)
 println("\tdone.")
 print("Saving image to $(IMAGE_PATH)...")
 CairoMakie.save(IMAGE_PATH, fig)
+println(" done.")
+
+# Drawing occlusion-saliency heatmap (what the model uses to decide)
+print("Computing occlusion saliency...")
+fig_saliency = plot_saliency(tmc, x_test, y_test)
+println("\tdone.")
+print("Saving saliency image to $(SALIENCY_IMAGE_PATH)...")
+CairoMakie.save(SALIENCY_IMAGE_PATH, fig_saliency)
 println(" done.")
