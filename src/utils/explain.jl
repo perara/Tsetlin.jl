@@ -1,9 +1,9 @@
 include("../Tsetlin.jl")
 
-export explain
+export explain, saliency, class_saliency
 
 using Base.Threads
-using .Tsetlin: TMInput, TMClassifier, TATeam
+using .Tsetlin: TMInput, TMClassifier, TATeam, predict
 
 
 struct ExplainedLiteralSum
@@ -131,4 +131,104 @@ function explain(tm::TMClassifier{ClassType}, X::Vector{TMInput})::Vector{Dict{C
         res[i] = explain(tm, X[i])
     end
     return res
+end
+
+
+# ---------------------------------------------------------------------------
+# Occlusion saliency: a domain-agnostic, model-faithful attribution that works
+# on any TMClassifier (binary or multiclass) and any input size. It measures
+# how much each input bit contributes to the predicted/target class decision by
+# how far the class margin drops when that bit is occluded. Returns a plain
+# Vector{Float64} over input bits (length == length(x)); reshape it to your
+# modality (e.g. 28x28 for images) only when visualising.
+# ---------------------------------------------------------------------------
+
+# Per-class scores (positive vote - negative vote), aligned with tm.classes.
+@inline function _class_scores!(s::Vector{Int64}, tm::TMClassifier{<:Bool}, x::TMInput; index::Bool=false)
+    p, n = Tsetlin.vote(tm, tm.clauses, x; index=index)
+    s[1] = p - n   # tm.classes[1] == true
+    s[2] = n - p   # tm.classes[2] == false
+    return s
+end
+
+@inline function _class_scores!(s::Vector{Int64}, tm::TMClassifier, x::TMInput; index::Bool=false)
+    @inbounds for k in eachindex(tm.clauses)
+        p, n = Tsetlin.vote(tm, tm.clauses[k], x; index=index)
+        s[k] = p - n
+    end
+    return s
+end
+
+# Margin of class index ti = its score minus the best competing class score.
+@inline function _margin(s::Vector{Int64}, ti::Int)::Int64
+    best = typemin(Int64)
+    @inbounds for j in eachindex(s)
+        j == ti && continue
+        s[j] > best && (best = s[j])
+    end
+    return s[ti] - best
+end
+
+"""
+    saliency(tm, x; target=nothing, occlude=:off, index=false) -> Vector{Float64}
+
+Per-bit occlusion saliency for a single input `x`. `importance[i]` is the drop
+in the `target` class margin when bit `i` is occluded (so positive = the bit
+supports the target class). `target` defaults to the predicted class.
+
+`occlude`:
+  `:off`  set bit 1->0 (classic remove-evidence; already-0 bits get 0 and are skipped)
+  `:on`   set bit 0->1
+  `:flip` flip every bit (use for dense/balanced inputs where there is no "off")
+"""
+function saliency(tm::TMClassifier{ClassType}, x::TMInput; target::Union{ClassType, Nothing}=nothing, occlude::Symbol=:off, index::Bool=false)::Vector{Float64} where ClassType
+    occlude in (:off, :on, :flip) || error("occlude must be :off, :on, or :flip")
+    K = length(tm.classes)
+    s = Vector{Int64}(undef, K)
+    s2 = Vector{Int64}(undef, K)
+    _class_scores!(s, tm, x; index=index)
+    ti = target === nothing ? argmax(s) : findfirst(==(target), tm.classes)
+    ti === nothing && error("target $target is not one of tm.classes")
+    base = _margin(s, ti)
+    imp = zeros(Float64, length(x))
+    @inbounds for i in 1:length(x)
+        b = x[i]
+        if occlude === :off
+            b || continue
+            nv = false
+        elseif occlude === :on
+            b && continue
+            nv = true
+        else
+            nv = !b
+        end
+        x[i] = nv
+        _class_scores!(s2, tm, x; index=index)
+        x[i] = b                      # restore
+        imp[i] = base - _margin(s2, ti)
+    end
+    return imp
+end
+
+"""
+    class_saliency(tm, X, target; occlude=:off, index=false, only_correct=true, limit=typemax(Int))
+
+Average `saliency` over the inputs in `X` for class `target`, giving a
+class-level attribution map. By default only inputs the model classifies as
+`target` are included. Returns `(map::Vector{Float64}, n_used::Int)`.
+"""
+function class_saliency(tm::TMClassifier{ClassType}, X::AbstractVector{TMInput}, target::ClassType; occlude::Symbol=:off, index::Bool=false, only_correct::Bool=true, limit::Int=typemax(Int)) where ClassType
+    isempty(X) && error("X is empty")
+    acc = zeros(Float64, length(first(X)))
+    cnt = 0
+    for x in X
+        cnt >= limit && break
+        if only_correct && predict(tm, x; index=index) != target
+            continue
+        end
+        acc .+= saliency(tm, x; target=target, occlude=occlude, index=index)
+        cnt += 1
+    end
+    cnt > 0 && (acc ./= cnt)
+    return acc, cnt
 end
