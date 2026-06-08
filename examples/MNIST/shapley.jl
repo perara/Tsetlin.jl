@@ -35,7 +35,8 @@ for (col, i) in enumerate(findall(k -> predict(tm, xte[k])==yte[k], eachindex(xt
     a2=Axis(fig[1,2],aspect=DataAspect(),title="occlusion saliency"); heatmap!(a2, img(max.(0.0,occ)), colormap=:hot); hidedecorations!(a2);hidespines!(a2)
     a3=Axis(fig[1,3],aspect=DataAspect(),title="Shapley ($SAMPLES samples)"); heatmap!(a3, img(max.(0.0,shp)), colormap=:hot); hidedecorations!(a3);hidespines!(a3)
     m=maximum(abs,shp); m=m==0 ? 1.0 : m
-    a4=Axis(fig[1,4],aspect=DataAspect(),title="Shapley signed (IS/IS-NOT)"); heatmap!(a4, img(shp), colormap=:RdBu, colorrange=(-m,m)); hidedecorations!(a4);hidespines!(a4)
+    sw = map(t -> abs(t) < 0.12*m ? 0.0 : t, shp)   # dark-midpoint + near-zero threshold
+    a4=Axis(fig[1,4],aspect=DataAspect(),title="Shapley signed (IS red / IS-NOT blue)"); heatmap!(a4, img(sw), colormap=cgrad([:dodgerblue,:black,:red]), colorrange=(-m,m)); hidedecorations!(a4);hidespines!(a4)
 end
 Label(fig[0,:], "Shapley vs occlusion (fairer credit under feature interactions)", fontsize=22)
 p = joinpath(OUT, "xai_shapley.png"); CairoMakie.save(p, fig); println("saved: $p")

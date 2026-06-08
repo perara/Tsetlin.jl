@@ -20,34 +20,41 @@ println("training ($EP epochs)..."); train!(tm, xtr, ytr, xte, yte, EP; verbose=
 println("accuracy: ", round(accuracy(predict(tm, xte), yte)*100, digits=2), "%")
 
 img(v) = reverse(reshape(Float64.(v), 28, 28), dims=2)
-function diverging!(ax, v)
+# Dark-midpoint diverging: neutral -> black (blends with the background, i.e.
+# "doesn't matter"), red = IS, blue = IS-NOT -- both pop. `thresh` zeroes out
+# near-zero (redundant) pixels so they don't speckle the map.
+const SIGNED_CMAP = cgrad([:dodgerblue, :black, :red])
+function signed!(ax, v; thresh=0.12)
     m = maximum(abs, v); m = m == 0 ? 1.0 : m
-    heatmap!(ax, img(v), colormap=:RdBu, colorrange=(-m, m)); hidedecorations!(ax); hidespines!(ax)
+    w = map(t -> abs(t) < thresh * m ? 0.0 : t, v)
+    heatmap!(ax, img(w), colormap=SIGNED_CMAP, colorrange=(-m, m)); hidedecorations!(ax); hidespines!(ax)
 end
+# Red-only "what supports the class" view (drops the IS-NOT / off-template signal).
+support!(ax, v) = (heatmap!(ax, img(max.(0.0, v)), colormap=:hot); hidedecorations!(ax); hidespines!(ax))
 
 # instance: a 7
 i7 = findfirst(i -> yte[i]==Int8(7) && predict(tm, xte[i])==Int8(7), eachindex(xte))
 x = xte[i7]
 sg = saliency(tm, x; occlude=:off)                          # signed: is(red) vs not(blue)
-# runner-up class
 sv = [let (p,n)=Tsetlin.vote(tm, tm.clauses[k], x); p-n end for k in eachindex(tm.clauses)]
 pred = argmax(sv); runner = argmax([j==pred ? typemin(Int) : sv[j] for j in eachindex(sv)])
 cls = tm.classes[pred]; rcls = tm.classes[runner]
 sc_vs = saliency(tm, x; target=cls, versus=rcls, occlude=:off)  # why cls and not rcls
 
 set_theme!(theme_black())
-fig = Figure(size=(1500, 900))
+fig = Figure(size=(1700, 900))
 ax1 = Axis(fig[1,1], aspect=DataAspect(), title="input (a $(cls))"); heatmap!(ax1, img([x[i] for i in 1:length(x)]), colormap=:grays); hidedecorations!(ax1); hidespines!(ax1)
-ax2 = Axis(fig[1,2], aspect=DataAspect(), title="signed saliency: IS (red) / IS-NOT (blue)"); diverging!(ax2, sg)
-ax3 = Axis(fig[1,3], aspect=DataAspect(), title="contrastive: why $(cls) (red) not $(rcls) (blue)"); diverging!(ax3, sc_vs)
+ax2 = Axis(fig[1,2], aspect=DataAspect(), title="signed: IS (red) / IS-NOT (blue)"); signed!(ax2, sg)
+ax3 = Axis(fig[1,3], aspect=DataAspect(), title="support only (what makes it a $(cls))"); support!(ax3, sg)
+ax4 = Axis(fig[1,4], aspect=DataAspect(), title="contrastive: why $(cls) not $(rcls)"); signed!(ax4, sc_vs)
 
 # per-class discriminative signed: class evidence minus cross-class average ->
 # red = distinctive of this digit (IS), blue = territory of other digits (IS NOT)
-Label(fig[2,1:3], "Per-class discriminative saliency  —  red = IS this digit, blue = IS NOT", fontsize=20)
+Label(fig[2,1:4], "Per-class discriminative saliency  —  red = IS this digit, blue = IS NOT", fontsize=20)
 maps = [class_saliency(tm, [xte[i] for i in eachindex(xte) if yte[i]==Int8(d)], Int8(d); occlude=:off, limit=25)[1] for d in 0:9]
 mn = mean(maps)
 for d in 0:9
-    ax = Axis(fig[3 + d÷5, d%5+1], aspect=DataAspect(), title=string(d)); diverging!(ax, maps[d+1] .- mn)
+    ax = Axis(fig[3 + d÷5, d%5+1], aspect=DataAspect(), title=string(d)); signed!(ax, maps[d+1] .- mn)
 end
-Label(fig[0,:], "Signed & contrastive saliency (what it IS vs what it is NOT)", fontsize=24)
+Label(fig[0,:], "Signed & contrastive saliency (red = IS, dark = doesn't matter, blue = IS NOT)", fontsize=24)
 p = joinpath(OUT, "xai_contrastive.png"); CairoMakie.save(p, fig); println("saved: $p")
