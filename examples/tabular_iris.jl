@@ -72,3 +72,42 @@ for (i, c) in enumerate(ys)
     best = argmax([sum(count_ones, @view ta.positive_included_literals[:, j]) + sum(count_ones, @view ta.positive_included_literals_inverted[:, j]) for j in 1:size(ta.positive_included_literals, 2)])
     println("  $(species[i])  IF  ", join(unique(clause_rule(c, best)), "  AND  "))
 end
+
+# ============ VISUALISE: XAI overlaid on the data table ============
+# Each cell colour = does this feature's value SUPPORT (red) or OPPOSE (blue) the
+# model's prediction for that row, with the actual value printed in the cell.
+Base.find_package("CairoMakie") === nothing && Pkg.add("CairoMakie")
+using CairoMakie
+OUT = joinpath(@__DIR__, "..", ".cache"); mkpath(OUT)
+short(s) = replace(String(s), "Iris-" => "")
+
+# a handful of rows per class
+showi = Int[]
+for c in ys, j in eachindex(Xte)
+    Yte[j] == c && count(k -> Yte[k] == c, showi) < 6 && push!(showi, j)
+end
+ninst = length(showi)
+Z = zeros(NFEAT, ninst); vals = zeros(NFEAT, ninst); rowlab = String[]
+for (col, j) in enumerate(showi)
+    x = Xte[j]; pc = predict(tm, x)
+    Z[:, col] = group_importance(saliency(tm, x; target=pc), feature_bits; agg = sum)   # SIGNED per feature
+    vals[:, col] = Xall[:, te[j]]
+    push!(rowlab, "$(short(species[Yte[j]+1])) → $(short(species[pc+1]))")
+end
+m = maximum(abs, Z); m = m == 0 ? 1.0 : m
+
+set_theme!()
+fig = Figure(size=(1150, 1000))
+axb = Axis(fig[1, 1], title="Global feature importance (occlusion vs Shapley)", xticks=(1:NFEAT, fnames), ylabel="importance", xticklabelrotation=0.25)
+barplot!(axb, (1:NFEAT) .- 0.18, fimp, width=0.34, label="occlusion", color=:steelblue)
+barplot!(axb, (1:NFEAT) .+ 0.18, fsh, width=0.34, label="shapley", color=:darkorange); axislegend(axb)
+axt = Axis(fig[2, 1], yreversed=true, title="XAI in the table — cell colour: does this feature value SUPPORT (red) or OPPOSE (blue) the prediction?",
+           xticks=(1:NFEAT, fnames), yticks=(1:ninst, rowlab), xaxisposition=:top, xticklabelrotation=0.0)
+heatmap!(axt, 1:NFEAT, 1:ninst, Z, colormap=:RdBu, colorrange=(-m, m))
+for f in 1:NFEAT, i in 1:ninst
+    tc = abs(Z[f, i]) > 0.55 * m ? :white : :black   # readable on strong cells
+    text!(axt, f, i; text=@sprintf("%.1f", vals[f, i]), align=(:center, :center), fontsize=13, color=tc)
+end
+Colorbar(fig[2, 2], colormap=:RdBu, limits=(-m, m), label="opposes ←   → supports", ticks=([-m, 0, m], ["oppose", "0", "support"]))
+Label(fig[0, :], "Tsetlin XAI on tabular data (Iris)", fontsize=24)
+p = joinpath(OUT, "xai_tabular.png"); CairoMakie.save(p, fig); println("\nsaved: $p")
