@@ -6,3 +6,6 @@
 
 # VS Code local history
 .history/
+
+# Local cache (example outputs, models, generated images)
+.cache/

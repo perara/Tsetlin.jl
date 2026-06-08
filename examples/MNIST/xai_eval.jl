@@ -13,7 +13,7 @@ using CairoMakie
 
 const EPOCHS = parse(Int, get(ENV, "XAI_EPOCHS", "40"))
 const NEVAL  = parse(Int, get(ENV, "XAI_NEVAL", "25"))
-const OUT = tempdir()
+const OUT = joinpath(@__DIR__, "..", "..", ".cache"); mkpath(OUT)
 rng = MersenneTwister(1)
 
 xtr, ytr = Tsetlin.unzip([MNIST(:train)...]); xte, yte = Tsetlin.unzip([MNIST(:test)...])

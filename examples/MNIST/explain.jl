@@ -10,9 +10,10 @@ using MLDatasets: MNIST, FashionMNIST
 using .Tsetlin: TMInput, TMClassifier, train!, save, load, unzip, booleanize, compile, check_clause, predict
 
 
-MODEL_PATH = joinpath(tempdir(), "tm.tm")
-IMAGE_PATH = joinpath(tempdir(), "FPTM_MNIST_heatmap.png")
-SALIENCY_IMAGE_PATH = joinpath(tempdir(), "FPTM_MNIST_saliency.png")
+CACHE_DIR = joinpath(@__DIR__, "..", "..", ".cache"); mkpath(CACHE_DIR)
+MODEL_PATH = joinpath(CACHE_DIR, "tm.tm")
+IMAGE_PATH = joinpath(CACHE_DIR, "FPTM_MNIST_heatmap.png")
+SALIENCY_IMAGE_PATH = joinpath(CACHE_DIR, "FPTM_MNIST_saliency.png")
 
 x_train, y_train = unzip([MNIST(:train)...])
 x_test, y_test = unzip([MNIST(:test)...])
