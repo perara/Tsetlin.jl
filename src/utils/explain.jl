@@ -1,8 +1,9 @@
 include("../Tsetlin.jl")
 
-export explain, saliency, class_saliency, top_clauses, faithfulness, counterfactual, global_importance, clause_necessity
+export explain, saliency, class_saliency, top_clauses, faithfulness, counterfactual, global_importance, clause_necessity, shapley
 
 using Base.Threads
+using Random: shuffle!, default_rng
 using .Tsetlin: TMInput, TMClassifier, TATeam, predict
 
 
@@ -249,6 +250,59 @@ end
 
 
 _copy(x::TMInput) = (c = Memory{UInt64}(undef, length(x.chunks)); copyto!(c, x.chunks); TMInput(c, x.len))
+
+"""
+    shapley(tm, x; target=nothing, versus=nothing, samples=50, baseline=nothing, index=false, rng=default_rng())
+
+Monte-Carlo (permutation-sampled) Shapley values for the `target` class margin.
+Unlike single-bit occlusion, Shapley credits each bit by its *average marginal*
+contribution across random coalitions, so it shares credit fairly between
+interacting/redundant bits. Signed (positive = supports `target`, negative =
+against), supports `versus` for contrast, and satisfies the efficiency property
+`sum(phi) ≈ margin(x) - margin(baseline)`.
+
+Only bits where `x` differs from `baseline` (default all-zero) get nonzero value,
+so the cost is `samples * (#differing bits) * predict`.
+"""
+function shapley(tm::TMClassifier{ClassType}, x::TMInput; target::Union{ClassType, Nothing}=nothing, versus::Union{ClassType, Nothing}=nothing, samples::Int=50, baseline::Union{TMInput, Nothing}=nothing, index::Bool=false, rng=default_rng())::Vector{Float64} where ClassType
+    n = length(x)
+    base_in = baseline === nothing ? TMInput(n) : baseline
+    K = length(tm.classes)
+    s = Vector{Int64}(undef, K)
+    _class_scores!(s, tm, x; index=index)
+    ti = target === nothing ? argmax(s) : findfirst(==(target), tm.classes)
+    ti === nothing && error("target $target is not one of tm.classes")
+    vi = 0
+    if versus !== nothing
+        vi = something(findfirst(==(versus), tm.classes), 0)
+        vi == 0 && error("versus $versus is not one of tm.classes")
+    end
+    contrast(sv) = vi == 0 ? _margin(sv, ti) : Int64(sv[ti] - sv[vi])
+
+    active = Int[]
+    @inbounds for i in 1:n
+        x[i] != base_in[i] && push!(active, i)
+    end
+    phi = zeros(Float64, n)
+    xc = _copy(base_in)
+    for _ in 1:samples
+        shuffle!(rng, active)
+        _class_scores!(s, tm, xc; index=index)
+        prev = contrast(s)
+        @inbounds for i in active
+            xc[i] = x[i]
+            _class_scores!(s, tm, xc; index=index)
+            cur = contrast(s)
+            phi[i] += cur - prev
+            prev = cur
+        end
+        @inbounds for i in active
+            xc[i] = base_in[i]
+        end
+    end
+    phi ./= samples
+    return phi
+end
 
 """
     top_clauses(tm, x; target=nothing, k=5, index=false)

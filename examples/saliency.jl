@@ -77,3 +77,7 @@ cls = predict(tm, x); top1 = top_clauses(tm, x; k=1)[1].clause
 Xcls = [Xte[i] for i in eachindex(Xte) if Yte[i] == cls]
 viol = clause_necessity(tm, cls, top1, Xcls)
 println("necessity: clause $top1 has ", count(==(0), viol), " literal-positions never violated on class $cls (consistent template)")
+
+# --- Shapley values: fair credit under interactions; sum(phi) = margin ---
+shp = shapley(tm, x; samples=100)
+println("\nshapley top bits: ", sort(sortperm(shp, rev=true)[1:SIG]), "  (sum phi = ", round(sum(shp), digits=2), ")")
