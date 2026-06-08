@@ -176,12 +176,20 @@ Per-bit occlusion saliency for a single input `x`. `importance[i]` is the drop
 in the `target` class margin when bit `i` is occluded (so positive = the bit
 supports the target class). `target` defaults to the predicted class.
 
+The returned values are SIGNED: positive = the bit supports the target class,
+negative = the bit is evidence AGAINST it (toward another class). Render with a
+diverging colormap to see "what it is" (red) vs "what it is not" (blue).
+
+`versus`: if given, contrast against that specific class instead of the best
+competitor -- i.e. "why `target` and not `versus`" (positive favours `target`,
+negative favours `versus`).
+
 `occlude`:
   `:off`  set bit 1->0 (classic remove-evidence; already-0 bits get 0 and are skipped)
   `:on`   set bit 0->1
   `:flip` flip every bit (use for dense/balanced inputs where there is no "off")
 """
-function saliency(tm::TMClassifier{ClassType}, x::TMInput; target::Union{ClassType, Nothing}=nothing, occlude::Symbol=:off, index::Bool=false)::Vector{Float64} where ClassType
+function saliency(tm::TMClassifier{ClassType}, x::TMInput; target::Union{ClassType, Nothing}=nothing, versus::Union{ClassType, Nothing}=nothing, occlude::Symbol=:off, index::Bool=false)::Vector{Float64} where ClassType
     occlude in (:off, :on, :flip) || error("occlude must be :off, :on, or :flip")
     K = length(tm.classes)
     s = Vector{Int64}(undef, K)
@@ -189,7 +197,13 @@ function saliency(tm::TMClassifier{ClassType}, x::TMInput; target::Union{ClassTy
     _class_scores!(s, tm, x; index=index)
     ti = target === nothing ? argmax(s) : findfirst(==(target), tm.classes)
     ti === nothing && error("target $target is not one of tm.classes")
-    base = _margin(s, ti)
+    vi = 0
+    if versus !== nothing
+        vi = something(findfirst(==(versus), tm.classes), 0)
+        vi == 0 && error("versus $versus is not one of tm.classes")
+    end
+    contrast(sv) = vi == 0 ? _margin(sv, ti) : Int64(sv[ti] - sv[vi])
+    base = contrast(s)
     imp = zeros(Float64, length(x))
     @inbounds for i in 1:length(x)
         b = x[i]
@@ -205,7 +219,7 @@ function saliency(tm::TMClassifier{ClassType}, x::TMInput; target::Union{ClassTy
         x[i] = nv
         _class_scores!(s2, tm, x; index=index)
         x[i] = b                      # restore
-        imp[i] = base - _margin(s2, ti)
+        imp[i] = base - contrast(s2)
     end
     return imp
 end
