@@ -1,6 +1,6 @@
 include("../Tsetlin.jl")
 
-export explain, saliency, class_saliency, top_clauses, faithfulness, counterfactual, global_importance, clause_necessity, shapley
+export explain, saliency, class_saliency, top_clauses, faithfulness, counterfactual, global_importance, clause_necessity, shapley, group_importance
 
 using Base.Threads
 using Random: shuffle!, default_rng
@@ -250,6 +250,17 @@ end
 
 
 _copy(x::TMInput) = (c = Memory{UInt64}(undef, length(x.chunks)); copyto!(c, x.chunks); TMInput(c, x.len))
+
+"""
+    group_importance(v, groups; agg = g -> sum(abs, g)) -> Vector
+
+Aggregate a per-bit attribution `v` (from `global_importance`, `saliency`,
+`shapley`, ...) to per-group values. `groups[i]` is the collection of bit indices
+belonging to group `i`. For tabular data each original feature is one group of
+encoding bits, so this turns bit-level attribution into feature-level importance.
+Default sums magnitudes; pass `agg = sum` for a signed total.
+"""
+group_importance(v::AbstractVector, groups; agg = g -> sum(abs, g)) = [agg(v[g]) for g in groups]
 
 """
     shapley(tm, x; target=nothing, versus=nothing, samples=50, baseline=nothing, index=false, rng=default_rng())
