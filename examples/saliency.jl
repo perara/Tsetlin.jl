@@ -67,3 +67,13 @@ println("faithfulness insertion AUC (higher=better): saliency ", round(fs.insert
 # --- counterfactual: minimal saliency-ranked flips that change the class ---
 cf = counterfactual(tm, x, osal)
 println("\ncounterfactual: flipping $(length(cf.flips)) bits changes $(cf.original) -> $(cf.new) (success=$(cf.success))")
+
+# --- global dataset-level importance ---
+gimp, _ = global_importance(tm, Xte; limit=200)
+println("\nglobal top bits (across the dataset): ", sort(sortperm(gimp, rev=true)[1:SIG]))
+
+# --- necessity: violations of a top clause's literals over its class ---
+cls = predict(tm, x); top1 = top_clauses(tm, x; k=1)[1].clause
+Xcls = [Xte[i] for i in eachindex(Xte) if Yte[i] == cls]
+viol = clause_necessity(tm, cls, top1, Xcls)
+println("necessity: clause $top1 has ", count(==(0), viol), " literal-positions never violated on class $cls (consistent template)")

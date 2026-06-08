@@ -1,6 +1,6 @@
 include("../Tsetlin.jl")
 
-export explain, saliency, class_saliency, top_clauses, faithfulness, counterfactual
+export explain, saliency, class_saliency, top_clauses, faithfulness, counterfactual, global_importance, clause_necessity
 
 using Base.Threads
 using .Tsetlin: TMInput, TMClassifier, TATeam, predict
@@ -316,4 +316,53 @@ function counterfactual(tm::TMClassifier, x::TMInput, order::AbstractVector{<:In
         end
     end
     return (; flips, original = orig, new = predict(tm, xc; index=index), success = false)
+end
+
+"""
+    global_importance(tm, X; occlude=:off, index=false, limit=typemax(Int))
+
+Dataset-level feature importance: the mean absolute per-bit saliency over the
+inputs in `X` (each explained for its own predicted class). Returns
+`(map::Vector{Float64}, n_used::Int)` over input bits -- which features the
+model relies on overall, independent of class.
+"""
+function global_importance(tm::TMClassifier, X::AbstractVector{TMInput}; occlude::Symbol=:off, index::Bool=false, limit::Int=typemax(Int))
+    isempty(X) && error("X is empty")
+    acc = zeros(Float64, length(first(X)))
+    cnt = 0
+    for x in X
+        cnt >= limit && break
+        acc .+= abs.(saliency(tm, x; occlude=occlude, index=index))
+        cnt += 1
+    end
+    cnt > 0 && (acc ./= cnt)
+    return acc, cnt
+end
+
+"""
+    clause_necessity(tm, target, clause, X; index=false) -> Vector{Int}
+
+Per-literal necessity for one clause of class `target`: how often each literal
+position is *violated* across the inputs `X`. In the graded clause a satisfied
+literal never changes the vote, so a literal violated zero times over `X` is
+redundant padding and can be dropped without changing the clause's behaviour on
+that data. Use it to strip a fuzzy clause to its load-bearing literals.
+"""
+function clause_necessity(tm::TMClassifier{ClassType}, target::ClassType, clause::Int, X::AbstractVector{TMInput}; index::Bool=false) where ClassType
+    ta = ClassType <: Bool ? tm.clauses : tm.clauses[findfirst(==(target), tm.classes)]
+    l = @view(ta.positive_included_literals[:, clause])
+    li = @view(ta.positive_included_literals_inverted[:, clause])
+    n = ta.clause_size
+    nch = length(l)
+    counts = zeros(Int, n)
+    failed = BitVector(undef, n)
+    @inbounds for x in X
+        for i in 1:nch
+            failed.chunks[i] = (~x.chunks[i] & l[i]) | (x.chunks[i] & li[i])
+        end
+        for i in 1:n
+            counts[i] += failed[i]
+        end
+    end
+    return counts
 end

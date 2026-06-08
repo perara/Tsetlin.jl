@@ -104,3 +104,41 @@ for d in 0:9
 end
 Label(fig3[0,:], "Global per-class saliency", fontsize=24)
 p3 = joinpath(OUT, "xai_global.png"); CairoMakie.save(p3, fig3); println("saved: $p3")
+
+# ---------- figure 4: global importance, minimal-rule (necessity), stability ----------
+Xsub = xte[1:2000]
+gimp, _ = global_importance(tm, Xsub; limit=300)
+
+# minimal-rule reduction of the instance's top clause
+c0 = predict(tm, x0); cidx = top_clauses(tm, x0; k=1)[1].clause
+ta0 = tm.clauses[findfirst(==(c0), tm.classes)]
+incl = let l = @view(ta0.positive_included_literals[:, cidx]), li = @view(ta0.positive_included_literals_inverted[:, cidx])
+    bv = BitVector(undef, ta0.clause_size); for i in eachindex(l); bv.chunks[i] = l[i] | li[i]; end
+    Float64.([bv[i] for i in 1:ta0.clause_size])
+end
+# Template extraction: count violations on the clause's OWN class; literals
+# consistently satisfied there are the load-bearing template, the rest is padding
+# the LF margin tolerates.
+Xclass = [xte[i] for i in eachindex(xte) if yte[i] == c0]
+viol = clause_necessity(tm, c0, cidx, Xclass)
+frac = viol ./ max(1, length(Xclass))
+loadbearing = incl .* (frac .< 0.15); redundant = incl .* (frac .>= 0.15)
+@printf("=== Minimal rule (clause %d, class %d): %d included -> %d load-bearing template, %d padding ===\n",
+        cidx, c0, Int(sum(incl)), Int(sum(loadbearing .> 0)), Int(sum(redundant .> 0)))
+
+# stability view: saliency on x0 vs a 8-bit-perturbed copy
+xp = _copy(x0); for j in rand(rng, 1:length(x0), 8); xp[j] = !xp[j]; end
+sal0 = max.(0.0, saliency(tm, x0)); salp = max.(0.0, saliency(tm, xp))
+
+fig4 = Figure(size=(1700, 360))
+g4 = [("global importance (all classes)", gimp, :hot),
+      ("clause $cidx: included literals", incl, :hot),
+      ("load-bearing template", loadbearing, :hot),
+      ("padding (LF-tolerated)", redundant, :hot),
+      ("saliency (x)", sal0, :hot),
+      ("saliency (x perturbed 8 bits)", salp, :hot)]
+for (j,(t,v,cm)) in enumerate(g4)
+    ax = Axis(fig4[1,j], aspect=DataAspect(), title=t, titlesize=14); heatmap!(ax, img(v), colormap=cm); hidedecorations!(ax); hidespines!(ax)
+end
+Label(fig4[0,:], "Global importance, minimal-rule (necessity), stability", fontsize=22)
+p4 = joinpath(OUT, "xai_global_necessity_stability.png"); CairoMakie.save(p4, fig4); println("saved: $p4")
